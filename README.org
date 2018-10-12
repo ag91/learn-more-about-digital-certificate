@@ -1,0 +1,68 @@
+# Created 2018-10-12 Fri 14:17
+#+TITLE: learn more about digital certificates
+A root authority has a private key which can use to sign certificates.
+This key must remain secret, otherwise everybody can sign trustworthy
+certificates. 
+
+#+BEGIN_SRC clojure
+(defn sign-with [certificate authority-certificate]
+  (update-in
+    certificate
+    [:signatures]
+    #(concat
+       [(str
+          "cert-hash-encrypted-with-"
+          (:identity-info authority-certificate)
+          "-private-key")]
+       %)))
+
+(def ca-pk 1)
+(def ica-pk 2)
+
+(defn get-public-key [private-key]
+  (- private-key 1))
+
+(defn make-ca-certificate [private-key]
+  {:public-key (get-public-key private-key)
+   :identity-info "ca-certificate"
+   :signatures ["cert-hash-encrypted-with-ca-private-key"]})
+
+(defn make-ica-certificate [private-key]
+  (sign-with
+   {:public-key (get-public-key private-key)
+   :identity-info "intermediate-certificate"
+   :signatures ["cert-hash-encrypted-with-ica-private-key"]}
+   (make-ca-certificate ca-pk)))
+
+
+(defn make-certificate-signing-request-to-ica 
+  "trust a certificate through ica: returns a chain of certificates"
+  [certificate]
+  (let [ica-cert (make-ica-certificate ica-pk)]
+  [(sign-with certificate ica-cert) ica-cert]))
+
+(def ssl-cert (make-certificate-signing-request-to-ica {:public-key 10
+   :identity-info "ssl-certificate"
+   :signatures ["cert-hash-encrypted-with-ssl-certificate-private-key"]}))
+#+END_SRC
+
+Signing with Intermediate Certificate Authority requires to send this
+intermediate certificate along to a signing request: so that the
+browser can step back to the root CA which should be available in the
+keystore.
+
+Once a browser trusts the SSL certificate, it obtains its public key,
+generates a symmetric key and encrypts the latter with the public key.
+Then it shares this encrypted key with the server from which received
+the SSL certificate. The server can decrypt the key as it has its own
+private key (with which the public key was generated) and server and
+browser use the unencrypted symmetric key to understand their
+encrypted traffic.
+
+#+BEGIN_SRC clojure
+(-> ssl-cert
+    (check-against-ca-cert-store [(make-ca-certificate ca-pk)]) ; the store contains the main CA certificate
+    (get-server-public-key) ; in the ssl-cert
+    (make-symmetric-key-and-encrypt-with-public-key)
+    (send-encrypted-symmetric-key-to-server))
+#+END_SRC
